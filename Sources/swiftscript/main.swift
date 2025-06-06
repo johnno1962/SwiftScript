@@ -30,6 +30,7 @@ debug("Parsing:", ProcessInfo.processInfo.arguments)
 
 var cwdBuffer = [CChar](repeating: 0, count: Int(PATH_MAX))
 getcwd(&cwdBuffer, cwdBuffer.count)
+let cwdURL = URL(fileURLWithPath: String(cString: cwdBuffer))
 let FileMngr = FileManager.default
 
 var arguments = Array(ProcessInfo.processInfo.arguments.dropFirst())
@@ -41,8 +42,9 @@ if arguments.isEmpty {
     exit(EXIT_FAILURE)
 }
 
-let scriptURL = URL(fileURLWithPath: arguments[0],
-                    relativeTo: URL(fileURLWithPath: String(cString: cwdBuffer)))
+let script = arguments[0]
+let scriptURL = (script.hasPrefix("https:") ? URL(string: script) : nil) ??
+                URL(fileURLWithPath: script, relativeTo: cwdURL)
 var scriptName = scriptURL.deletingPathExtension().lastPathComponent
 if scriptName == "main" {
     scriptName = scriptURL.deletingLastPathComponent().lastPathComponent
@@ -59,10 +61,13 @@ let scriptExec = scriptRoot+"/.build/\(scriptConfig)/"+scriptName
 let scriptHome = scriptRoot+"/Sources/"+scriptName
 let scriptMain = scriptHome+"/main.swift"
 
-debug("Arguments:", arguments, scriptURL.path, scriptMain)
+debug("Arguments:", arguments, scriptURL, scriptMain)
 
 // Should we regenerate Swift Package for script?
-if modified(scriptURL.path) > modified(scriptMain) ||
+if !scriptURL.isFileURL {
+    shell(command: "git clone '\(scriptURL.absoluteString)' '\(scriptRoot)'" +
+          " || cd '\(scriptRoot)' && git pull")
+} else if modified(scriptURL.path) > modified(scriptMain) ||
     scriptUpdated > modified(scriptMain) {
     try installScriptIntoSwiftPackage()
 }
@@ -81,8 +86,8 @@ if (!scriptIsSelf || arguments.count == 2) && arguments.last == "--edit" {
 // Rebuild Swift Package if necessary
 debug("Building?", scriptMain, modified(scriptMain), scriptExec, modified(scriptExec))
 
-if modified(scriptMain) > modified(scriptExec) {
-    shell(command: "cd '\(scriptRoot)' && swift build -c \(scriptConfig)")
+if modified(scriptMain) > modified(scriptExec) || !scriptURL.isFileURL {
+    shell(command: "cd '\(scriptRoot)' && time swift build -c \(scriptConfig)")
 }
 
 // Install to script binary directory
@@ -92,7 +97,8 @@ if !FileMngr.fileExists(atPath: scriptDir+scriptName) {
     if !FileMngr.fileExists(atPath: scriptDir) {
         sudo(command: "mkdir -p '\(scriptDir)'")
     }
-    sudo(command: "ln -s '\(scriptMain)' '\(scriptDir+scriptName)'")
+    let scriptDest = scriptURL.isFileURL ? scriptDir+scriptName : scriptExec
+    sudo(command: "ln -s '\(scriptDest)' '\(scriptDir+scriptName)'")
     print("ℹ️ New swiftscript installed as "+scriptDir+scriptName)
 }
 
